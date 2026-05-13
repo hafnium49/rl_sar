@@ -4,7 +4,8 @@
 **Target policy:** `policy/g1/whole_body_tracking/dance_102`
 **Outcome (initial):** ❌ Build failed at `setup_inference_runtime` step. Simulation not launched.
 **Root cause:** LibTorch prebuilt is not available for **aarch64 Linux non-Jetson** (DGX Spark) in [scripts/download_inference_runtime.sh](scripts/download_inference_runtime.sh).
-**Outcome (resolved):** ✅ `cmake_build/bin/rl_sim_mujoco` builds (15 MB), `torch.jit.load` succeeds on `dance_102/policy.pt`. Running the dance still gated on the missing display server. See §3 "Build result (resolved)".
+**Outcome (build resolved):** ✅ `cmake_build/bin/rl_sim_mujoco` builds (15 MB), `torch.jit.load` succeeds on `dance_102/policy.pt`. See §3b.
+**Outcome (final, dance running headless):** ✅✅ Full FSM path executed under Xvfb: Passive → GetUp → RoboMimicLocomotion → **WholeBodyTrackingDance102**. The dance played from 0.00% to **99.94%** of its 34.98s reference motion in a 180s wall-clock capture (~20% RTF). Captured to [dance_102.mp4](dance_102.mp4). See §7b.
 
 ---
 
@@ -215,9 +216,49 @@ Intended sequence had the build succeeded: `Passive` → press Num0 → wait ~3 
 
 ## 7. Observed behavior
 
+### 7a. Initial run (before unblocking the build)
+
 None — the binary was never produced. No MuJoCo viewer, no FSM transitions, no policy load, no motion playback observed.
 
-Secondary observation: even if the build succeeded, this host has **no display server** (`$DISPLAY` empty, no Wayland, no glxinfo). The MuJoCo viewer (GLFW + GLX) would fail to open without one of: an attached display, X11 forwarding (`ssh -X`), `MUJOCO_GL=egl` / `MUJOCO_GL=osmesa` headless rendering, or Xvfb. The `mj::Simulate` wrapper used at [src/rl_sar/library/thirdparty/mujoco_simulate/](src/rl_sar/library/thirdparty/mujoco_simulate/) drives all FSM key input through the viewer window, so headless GL alone (without keyboard injection) would only let the sim run in `Passive` mode — never reaching dance_102.
+Secondary observation: this host has **no display server** (`$DISPLAY` empty, no Wayland, no glxinfo). The MuJoCo viewer (GLFW + GLX) cannot open without one of: an attached display, X11 forwarding (`ssh -X`), `MUJOCO_GL=egl` / `MUJOCO_GL=osmesa` headless rendering, or **Xvfb**. Resolved in §7b.
+
+### 7b. Resolved run via Xvfb + scripted PTY input
+
+After the build was unblocked (§3b), a headless orchestrator at [scripts/run_dance_headless.py](scripts/run_dance_headless.py) successfully drove a full dance sequence:
+
+1. Started `Xvfb :99` at 640×480 software-rendered (`mesa-utils` shows `OpenGL renderer: llvmpipe`)
+2. Started `ffmpeg -f x11grab` recording to MP4
+3. Spawned `cmake_build/bin/rl_sim_mujoco g1 scene_29dof` under a PTY (via `pexpect`) so stdin is a real terminal — the binary's keyboard reader uses `tcsetattr` non-canonical mode ([src/rl_sar/library/core/rl_sdk/rl_sdk.cpp:350-374](src/rl_sar/library/core/rl_sdk/rl_sdk.cpp#L350-L374))
+4. Sent the **three** keys required by the G1 FSM hierarchy (not just Num0→Num3 as initially assumed):
+
+| When | Key | Transition (from run.log) | Wall-clock |
+|---|---|---|---|
+| t=11.6s | `0` | `Switch from RLFSMStatePassive to RLFSMStateGetUp` | 0.1 s after send |
+| auto | — | `Getting up completed` (2-sec interpolation finished) | **2.2 s** wall (≈91% RTF) |
+| t≈14s | `1` | `Switch from RLFSMStateGetUp to RLFSMStateRLRoboMimicLocomotion` | 0.1 s after send |
+| t≈14s | `3` | `Switch from RLFSMStateRLRoboMimicLocomotion to RLFSMStateRLWholeBodyTrackingDance102` | 0.1 s after send |
+
+After entering the dance state, the binary logged:
+
+```
+Successfully loaded Torch model: policy/g1/whole_body_tracking/dance_102/policy.pt
+MotionLoader: Loaded 1749 frames, 29 joints, duration=34.98s
+Motion reset with yaw alignment
+Motion duration: 34.98s
+[INFO] [...] 0.00% - whole_body_tracking/dance_102
+[INFO] [...] 0.06% - whole_body_tracking/dance_102
+…
+[INFO] [...] 99.94% - whole_body_tracking/dance_102
+```
+
+The dance progressed from **0.00% → 99.94%** of the 34.98 s reference motion over a 180 s wall-clock capture window. That's a real-time-factor of about **20%** for the full RL-inference + MuJoCo step + software-rendered viewer pipeline. GetUp's pure-kinematics state ran at ~91% RTF; the dance state is slower because it adds `torch::jit::forward()` on a 154-dim observation each control tick at 50 Hz, all on CPU through Mesa llvmpipe.
+
+**No protect warnings** (`TorqueProtect`, `AttitudeProtect`), **no JIT load failures**, **no motion-file errors**. The only error in the log was `Joystick [/dev/input/js0] open failed`, which is expected and harmless (no joystick attached).
+
+### 7c. Two non-obvious behaviors discovered in execution
+
+1. **G1's FSM does not allow direct GetUp → dance_102.** [fsm_g1.hpp:78-87](src/rl_sar/fsm_robot/fsm_g1.hpp#L78-L87) only accepts `Num1` (locomotion) or `Num9` (getdown) out of GetUp. You must transition GetUp → RoboMimicLocomotion → dance_102. The Num0→Num3 shorthand mentioned in `agent.md` §Step 8 is wrong for this build.
+2. **`RobotControl()` clears keyboard state every cycle.** [rl_sim_mujoco.cpp:222](src/rl_sar/src/rl_sim_mujoco.cpp#L222) calls `this->control.ClearInput()` at the end of every control loop iteration, which resets `current_keyboard` to `last_keyboard`. A single keypress only stays "live" for one control cycle. The headless orchestrator therefore implements `send_until_transition()` — re-sending the key every 5 s until the corresponding FSM transition appears in the log. With this retry loop, all three transitions fire within 0.1 s of the matching send.
 
 ---
 
@@ -225,12 +266,13 @@ Secondary observation: even if the build succeeded, this host has **no display s
 
 | Path | What |
 |---|---|
-| [build_mujoco.log](build_mujoco.log) | Full stdout/stderr capture of the failing `./build.sh -mj` run (8 lines) |
-| [docs/g1_dance_mujoco_plan.md](docs/g1_dance_mujoco_plan.md) | The execution plan (copy of `~/.claude/plans/read-agent-md-and-plan-sharded-platypus.md`) |
-| [CLAUDE.md](CLAUDE.md) | Project guidance written during the prior `/init` turn |
+| [build_mujoco.log](build_mujoco.log) | Full `./build.sh -mj` build output (final run; ~2000 lines) |
+| [run.log](run.log) | Headless run output captured by `pexpect.logfile_read` (~3.3 MB; ANSI-laden) |
+| [dance_102.mp4](dance_102.mp4) | Recorded simulation: 186 s, 640×480, 2788 frames @ 15 fps, 341 KB. First ~14 s is initial-pose + GetUp + locomotion transition; remainder is dance_102 motion playback at ~20% RTF (so ~35 s of sim motion shown). |
+| [scripts/run_dance_headless.py](scripts/run_dance_headless.py) | The Xvfb + PTY + ffmpeg orchestrator |
+| [docs/g1_dance_mujoco_plan.md](docs/g1_dance_mujoco_plan.md) | Original execution plan (build-unblock phase) |
+| [CLAUDE.md](CLAUDE.md) | Project guidance |
 | [rl_sar_g1_dance_run_report.md](rl_sar_g1_dance_run_report.md) | This report |
-
-No screenshots, no run.log, no `cmake_build/` artifacts.
 
 ---
 

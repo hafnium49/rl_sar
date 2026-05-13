@@ -4,15 +4,16 @@
 Pipeline:
   Xvfb :99  →  rl_sim_mujoco g1 scene_29dof (via PTY)  →  ffmpeg x11grab → MP4
 
-The binary's FSM keyboard input is delivered through stdin (termios non-canonical
-mode at src/rl_sar/library/core/rl_sdk/rl_sdk.cpp:383). Per fsm_g1.hpp the path
-to dance_102 requires THREE keypresses with a wait between each:
+Keyboard input goes through stdin via termios non-canonical mode (rl_sdk.cpp:383).
+The FSM path to dance_102 needs three keys with a wait between each:
 
   Passive --'0'--> GetUp(interp) --'1'--> RLRoboMimicLocomotion --'3'--> dance_102
 
-This script polls run.log to detect each FSM transition before sending the next
-key, which makes it robust against the very low real-time-factor under software
-rendering (Xvfb llvmpipe on aarch64 runs the sim at ~1% real-time).
+We use pexpect.expect() with regex patterns to gate each next-key on the actual
+log-line of the FSM transition. This is robust against the very low real-time-
+factor under Xvfb llvmpipe on aarch64 (~1% RTF for this 29-DoF G1 model).
+pexpect.expect() drives the PTY read loop, so output is drained continuously
+and the binary doesn't block on a full PTY buffer.
 
 Run with the venv interpreter:
   /tmp/rl_sar_uv_env/bin/python scripts/run_dance_headless.py
@@ -21,7 +22,6 @@ Run with the venv interpreter:
 from __future__ import annotations
 
 import os
-import re
 import signal
 import subprocess
 import sys
@@ -38,15 +38,13 @@ MP4 = REPO / "dance_102.mp4"
 LOG = REPO / "run.log"
 DISPLAY = ":99"
 
-# Screen size — smaller helps the llvmpipe software renderer keep up
 W, H = 640, 480
 
-# Per-transition wall-clock timeout (sim runs slow under Xvfb llvmpipe)
-TRANSITION_TIMEOUT_S = 900   # 15 min upper bound per state transition
-POLL_INTERVAL_S = 1.0
-# After reaching dance_102, how long to capture motion frames before shutdown
+# Per-transition timeout (sim under llvmpipe runs at ~1% RTF for the 29-DoF scene)
+TRANSITION_TIMEOUT_S = 900   # 15 min upper bound each
+# After dance_102 starts, how long to keep capturing
 DANCE_CAPTURE_S = 180
-# Hard ceiling on whole run + ffmpeg recording duration
+# Hard ceiling on the ffmpeg recording
 MAX_RECORD_S = 1800  # 30 min
 
 
@@ -61,27 +59,47 @@ def wait_for_xvfb(display: str, timeout: float = 5.0) -> bool:
     return False
 
 
-def wait_for_log_pattern(log_path: Path, pattern: str, timeout_s: float,
-                         label: str) -> bool:
-    """Tail the log file until `pattern` (regex) appears or timeout."""
-    print(f"[orchestrator] waiting for: {label}  (regex={pattern!r}, ≤{timeout_s:.0f}s)")
-    deadline = time.monotonic() + timeout_s
-    rx = re.compile(pattern)
-    pos = 0
-    while time.monotonic() < deadline:
+def expect_transition(proc: pexpect.spawn, regex: str, label: str,
+                      timeout_s: float) -> bool:
+    t0 = time.monotonic()
+    print(f"[orchestrator] waiting: {label}", flush=True)
+    try:
+        proc.expect(regex, timeout=timeout_s)
+    except pexpect.TIMEOUT:
+        print(f"[orchestrator] TIMEOUT waiting: {label}", file=sys.stderr, flush=True)
+        return False
+    except pexpect.EOF:
+        print(f"[orchestrator] EOF waiting: {label}", file=sys.stderr, flush=True)
+        return False
+    print(f"[orchestrator] matched: {label}  ({time.monotonic()-t0:.1f}s)", flush=True)
+    return True
+
+
+def send_until_transition(proc: pexpect.spawn, key: str, regex: str,
+                          label: str, total_timeout_s: float,
+                          inner_timeout_s: float = 5.0) -> bool:
+    """Send `key` and wait up to inner_timeout_s for `regex`; if not seen, re-send.
+
+    Needed because rl_sim_mujoco.cpp:222 calls ClearInput() at end of every
+    RobotControl cycle — a single send may be wiped before the FSM's CheckChange
+    notices it. Re-sending until the transition log appears wins the race.
+    """
+    t0 = time.monotonic()
+    print(f"[orchestrator] send-loop '{key}' until: {label}  (≤{total_timeout_s:.0f}s)",
+          flush=True)
+    while time.monotonic() - t0 < total_timeout_s:
+        proc.send(key)
         try:
-            with open(log_path, "r", errors="replace") as f:
-                f.seek(pos)
-                chunk = f.read()
-                pos = f.tell()
-        except FileNotFoundError:
-            chunk = ""
-        if chunk and rx.search(chunk):
-            elapsed = timeout_s - (deadline - time.monotonic())
-            print(f"[orchestrator] matched: {label}  (after {elapsed:.1f}s)")
+            proc.expect(regex, timeout=inner_timeout_s)
+            print(f"[orchestrator] matched: {label}  ({time.monotonic()-t0:.1f}s)",
+                  flush=True)
             return True
-        time.sleep(POLL_INTERVAL_S)
-    print(f"[orchestrator] TIMEOUT waiting for: {label}", file=sys.stderr)
+        except pexpect.TIMEOUT:
+            continue  # re-send
+        except pexpect.EOF:
+            print(f"[orchestrator] EOF in send-loop {label}", file=sys.stderr)
+            return False
+    print(f"[orchestrator] TIMEOUT in send-loop: {label}", file=sys.stderr, flush=True)
     return False
 
 
@@ -90,7 +108,6 @@ def main() -> int:
         print(f"ERROR: binary missing: {BIN}", file=sys.stderr)
         return 2
 
-    # Reset log so wait_for_log_pattern doesn't see stale matches
     if LOG.exists():
         LOG.unlink()
 
@@ -99,13 +116,15 @@ def main() -> int:
     env["LD_LIBRARY_PATH"] = f"{LIBTORCH}:{LIBMUJOCO}:" + env.get("LD_LIBRARY_PATH", "")
 
     procs: list[tuple[str, subprocess.Popen]] = []
-    print(f"[orchestrator] log -> {LOG}")
-    print(f"[orchestrator] video -> {MP4}")
-    print(f"[orchestrator] DISPLAY={DISPLAY} screen={W}x{H}")
+    print(f"[orchestrator] log -> {LOG}", flush=True)
+    print(f"[orchestrator] video -> {MP4}", flush=True)
+    print(f"[orchestrator] DISPLAY={DISPLAY} screen={W}x{H}", flush=True)
 
+    log_fh = None
+    proc = None
     try:
         # 1. Xvfb
-        print("[orchestrator] starting Xvfb")
+        print("[orchestrator] starting Xvfb", flush=True)
         xvfb = subprocess.Popen(
             ["Xvfb", DISPLAY, "-screen", "0", f"{W}x{H}x24"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -116,7 +135,7 @@ def main() -> int:
             return 3
 
         # 2. ffmpeg recording (long ceiling; we stop it when done)
-        print(f"[orchestrator] starting ffmpeg x11grab -> {MP4}")
+        print(f"[orchestrator] starting ffmpeg x11grab -> {MP4}", flush=True)
         ffmpeg = subprocess.Popen(
             [
                 "ffmpeg", "-y", "-framerate", "15",
@@ -130,75 +149,86 @@ def main() -> int:
         )
         procs.append(("ffmpeg", ffmpeg))
 
-        # 3. Spawn rl_sim_mujoco under PTY
+        # 3. Spawn rl_sim_mujoco under PTY; log everything pexpect reads
         log_fh = open(LOG, "w")
-        print(f"[orchestrator] spawning {BIN.name} g1 scene_29dof")
+        print(f"[orchestrator] spawning {BIN.name} g1 scene_29dof", flush=True)
         proc = pexpect.spawn(
             str(BIN), ["g1", "scene_29dof"],
             env=env, timeout=None,
             encoding="utf-8", codec_errors="replace",
-            logfile=log_fh,
         )
+        proc.logfile_read = log_fh  # log only output, not our sends
 
-        # 4. Sequenced key delivery, each gated on a log transition
-        time.sleep(8)  # FSM init + viewer warm-up
-        print("[orchestrator] sending '0' (Num0 → GetUp)")
-        proc.send("0")
-        if not wait_for_log_pattern(
-            LOG,
+        # 4. Wait for the binary to print the initial FSMManager line, then
+        #    drive transitions via expect()
+        if not expect_transition(
+            proc, r"FSMManager.*Registered type: g1",
+            "binary up (FSMManager registered g1)", 60):
+            return 4
+
+        # Give the viewer & simulation_running flag a moment to settle
+        time.sleep(3)
+
+        # Send '0' once — Passive's CheckChange has no percent-gate, so a single
+        # cycle with current_keyboard=Num0 triggers the transition.
+        if not send_until_transition(
+            proc, "0",
             r"Switch from RLFSMStatePassive to RLFSMStateGetUp",
-            TRANSITION_TIMEOUT_S,
-            "Passive → GetUp",
-        ):
+            "Passive → GetUp", total_timeout_s=60):
             return 10
 
-        print("[orchestrator] sending '1' (Num1 → RoboMimicLocomotion when GetUp completes)")
-        proc.send("1")
-        if not wait_for_log_pattern(
-            LOG,
+        # Wait for GetUp interpolation to reach 100%, THEN send Num1.
+        # Interpolate prints "100.00% - Getting up" followed by "Getting up completed".
+        if not expect_transition(
+            proc, r"Getting up completed",
+            "GetUp interpolation 100%", TRANSITION_TIMEOUT_S):
+            return 13
+
+        # Now send Num1 repeatedly until the transition fires (beats ClearInput race).
+        if not send_until_transition(
+            proc, "1",
             r"Switch from RLFSMStateGetUp to RLFSMStateRLRoboMimicLocomotion",
-            TRANSITION_TIMEOUT_S,
-            "GetUp → RoboMimicLocomotion",
-        ):
+            "GetUp → RoboMimicLocomotion", total_timeout_s=120):
             return 11
 
-        print("[orchestrator] sending '3' (Num3 → WholeBodyTrackingDance102)")
-        proc.send("3")
-        if not wait_for_log_pattern(
-            LOG,
+        # RLRoboMimicLocomotion's Enter loads its model; Num3 must be seen by
+        # CheckChange to transition. Send '3' repeatedly.
+        if not send_until_transition(
+            proc, "3",
             r"Switch from RLFSMStateRLRoboMimicLocomotion to RLFSMStateRLWholeBodyTrackingDance102",
-            TRANSITION_TIMEOUT_S,
-            "Locomotion → WholeBodyTrackingDance102",
-        ):
+            "Locomotion → WholeBodyTrackingDance102", total_timeout_s=300):
             return 12
 
-        # 5. Capture some dance frames
-        print(f"[orchestrator] dance_102 active — capturing {DANCE_CAPTURE_S}s")
-        time.sleep(DANCE_CAPTURE_S)
+        # 5. Capture dance frames. Use expect with TIMEOUT to keep the PTY drained
+        #    while we wait DANCE_CAPTURE_S seconds.
+        print(f"[orchestrator] dance_102 active — capturing {DANCE_CAPTURE_S}s", flush=True)
+        try:
+            proc.expect(pexpect.TIMEOUT, timeout=DANCE_CAPTURE_S)
+        except pexpect.EOF:
+            print("[orchestrator] binary exited during dance capture", file=sys.stderr)
 
         # 6. Clean shutdown
-        print("[orchestrator] sending SIGINT to rl_sim_mujoco")
+        print("[orchestrator] sending SIGINT to rl_sim_mujoco", flush=True)
         proc.kill(signal.SIGINT)
         try:
             proc.expect(pexpect.EOF, timeout=15)
         except pexpect.TIMEOUT:
-            print("[orchestrator] EOF timeout; SIGTERM")
+            print("[orchestrator] EOF timeout; SIGTERM", flush=True)
             proc.terminate(force=True)
         return 0
 
     finally:
+        # Stop ffmpeg + Xvfb
         for name, p in procs:
             if p.poll() is None:
-                print(f"[orchestrator] stopping {name}")
+                print(f"[orchestrator] stopping {name}", flush=True)
                 p.terminate()
                 try:
                     p.wait(timeout=10)
                 except subprocess.TimeoutExpired:
                     p.kill()
-        try:
+        if log_fh is not None:
             log_fh.close()
-        except Exception:
-            pass
 
 
 if __name__ == "__main__":
