@@ -42,3 +42,6 @@ temp_extract*/
 
 # robot descriptions
 rl_sar_zoo
+
+# video artifacts (recordings of the simulator)
+*.mp4
