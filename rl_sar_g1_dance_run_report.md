@@ -2,8 +2,9 @@
 
 **Run date:** 2026-05-13
 **Target policy:** `policy/g1/whole_body_tracking/dance_102`
-**Outcome:** ❌ Build failed at `setup_inference_runtime` step. Simulation not launched.
+**Outcome (initial):** ❌ Build failed at `setup_inference_runtime` step. Simulation not launched.
 **Root cause:** LibTorch prebuilt is not available for **aarch64 Linux non-Jetson** (DGX Spark) in [scripts/download_inference_runtime.sh](scripts/download_inference_runtime.sh).
+**Outcome (resolved):** ✅ `cmake_build/bin/rl_sim_mujoco` builds (15 MB), `torch.jit.load` succeeds on `dance_102/policy.pt`. Running the dance still gated on the missing display server. See §3 "Build result (resolved)".
 
 ---
 
@@ -58,6 +59,8 @@ libfmt-dev, libtbb-dev, liblcm-dev
 
 ## 3. Build result
 
+### 3a. Initial run — failed
+
 **Command:** `./build.sh -mj 2>&1 | tee build_mujoco.log`
 
 **Outcome:** Failed at step 1 (`setup_inference_runtime`). The full captured log:
@@ -104,6 +107,56 @@ config.yaml                        # model_name: policy.pt
 ```
 
 There is no `.onnx` companion, so even though `download_inference_runtime.sh` has a working aarch64 ONNX Runtime URL ([line 201](scripts/download_inference_runtime.sh#L201)), it cannot be used to load this policy. The same is true for `gangnam_style` (only `policy.pt` + motion CSV + config).
+
+### 3b. Resolved build
+
+Final working recipe — bypass the script's aarch64 bail-out by pre-populating `library/` with assets sourced from a local `uv` venv (for MuJoCo) and an existing conda env (for LibTorch, since the pip-installed wheel had an ABI mismatch with Ubuntu 24.04):
+
+| Step | What | Notes |
+|---|---|---|
+| 0 | `git submodule update --init --recursive` | The build needs `unitree_sdk2`, `Lite3_MotionSDK`, `agibot_D1_Edu-Ultra`, `joystick`, etc. — 6 submodules, all anonymous HTTPS |
+| 1 | `uv venv /tmp/rl_sar_uv_env --python 3.10 && uv pip install "mujoco==3.2.7" "torch==2.3.0" numpy` | Per upstream MuJoCo install guidance |
+| 2 | Symlink wheel's `include/` + `libmujoco.so.3.2.7` into `library/mujoco/`, write `VERSION_NUMBER=3.2.7` | Exact-version match; CMake's hardcoded `libmujoco.so.3.2.7` ([CMakeLists.txt:660](src/rl_sar/CMakeLists.txt#L660)) resolves directly |
+| 3a | Initial: copy torch 2.3.0 (pip) + its `torch.libs/` sibling dir into `library/inference_runtime/libtorch/` | **Failed** — pip torch is `_GLIBCXX_USE_CXX11_ABI=0` (OLD ABI) while Ubuntu 24.04 system `yaml-cpp` is NEW ABI → undefined references on `YAML::LoadFile(std::string)` etc. |
+| 3b | Switched to NVIDIA-built **torch 2.9.1+cu130** from conda env `sam3` (`CXX11_ABI=True`) | Eliminated the ABI mismatch. JIT-load of the 2.3-era policy still works (verified) |
+| 3c | Copied 4 extra CUDA deps from `sam3/lib/.../nvidia/{cudnn,nccl,nvshmem,cusparselt}/lib/` into `library/inference_runtime/libtorch/lib/` | Needed by `libtorch_cuda.so` because find_package(Torch) links the full set even though we only do CPU inference |
+| 4 | `sudo apt install` 9 dev packages: yaml-cpp, eigen3, boost-all, spdlog, fmt, tbb, lcm, glfw3-dev, python3-dev, python3-numpy (skipped transitional `libgl1-mesa-glx` and `libegl1-mesa`) | Ubuntu 24.04 noble naming |
+| 5 | `CMAKE_PREFIX_PATH=.../libtorch/share/cmake CUDAToolkit_ROOT=/usr/local/cuda bash -o pipefail -c './build.sh -mj 2>&1 \| tee build_mujoco.log'` | CUDAToolkit_ROOT needed because `TorchConfig.cmake` pulls in `Caffe2Config.cmake` which `find_package(CUDAToolkit REQUIRED)` |
+
+**Result:** all 7 binaries built (rl_real_a1/d1/g1/go2/l4w4/lite3 + **rl_sim_mujoco**). Build log: [build_mujoco.log](build_mujoco.log).
+
+**Binary verification:**
+- Size: 15 MB at `cmake_build/bin/rl_sim_mujoco`
+- `ldd` resolves cleanly to our trees:
+  ```
+  libmujoco.so.3.2.7 -> library/mujoco/lib/libmujoco.so.3.2.7
+  libtorch_cpu.so    -> library/inference_runtime/libtorch/lib/libtorch_cpu.so
+  libc10.so          -> library/inference_runtime/libtorch/lib/libc10.so
+  libcudnn.so.9      -> library/inference_runtime/libtorch/lib/libcudnn.so.9
+  libarm_compute.so  -> library/inference_runtime/libtorch/lib/libarm_compute.so
+  libnvpl_blas_lp64_gomp.so.0 -> library/inference_runtime/libtorch/lib/...
+  ```
+- Smoke-launch: `./cmake_build/bin/rl_sim_mujoco` (no args) registers `FSMManager` for all 11 robot types (a1, b2, b2w, d1, g1, go2, go2w, gr1t1, gr1t2, l4w4, lite3) — confirming static init and dynamic linking succeed before the binary exits with a usage error. Full simulation requires `<ROBOT> <SCENE>` args and a display.
+
+**JIT-load smoke test (the canonical risk we wanted to surface early):**
+```bash
+$ /home/h_fujiwara/miniconda3/envs/sam3/bin/python -c "
+  import torch
+  m = torch.jit.load('policy/g1/whole_body_tracking/dance_102/policy.pt', map_location='cpu')
+  print(type(m).__name__, next(m.parameters()).shape)
+"
+RecursiveScriptModule torch.Size([512, 154])
+```
+The `154` matches `num_observations: 154` in [dance_102/config.yaml](policy/g1/whole_body_tracking/dance_102/config.yaml). The 2.3-era policy loads cleanly on the 2.9.1 runtime — no schema or opcode drift in this particular network.
+
+### 3c. What changed vs. the original plan
+
+The plan called for pip torch 2.3.0. In execution we found:
+1. The torch.libs sibling dir wasn't being copied by the reused `create_libtorch_from_pytorch` body — fixed by an extra copy step.
+2. Pip torch 2.3.0 aarch64 wheel uses OLD ABI, incompatible with Ubuntu 24.04 system yaml-cpp/libstdc++ in NEW ABI. PyPI/PyTorch CPU index has no `cxx11.abi` variant for aarch64. So we replaced it with NVIDIA's NEW-ABI build from the local `sam3` conda env, which happened to ship CUDA support — needing the CUDAToolkit_ROOT environment variable.
+3. Git submodules had to be init'd separately (the README mentions `--recursive` clone; the cloned tree here was non-recursive).
+
+The plan's "use pre-installed mujoco" directive came through fully — `library/mujoco/lib/libmujoco.so.3.2.7` is the exact upstream-published wheel binary, no version fakery.
 
 ---
 
