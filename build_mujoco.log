@@ -1,0 +1,8 @@
+[0;34m-------------------------------------------------------------------[0m
+[0;34m[Setting up Inference Runtime][0m
+[0;34m[INFO][0m Checking inference libraries...
+[0;34m[INFO][0m Checking inference runtimes...
+[0;31m[ERROR][0m ARM64 Linux detected but not identified as Jetson
+[0;31m[ERROR][0m LibTorch prebuilt binaries for generic ARM64 Linux are not available
+[0;34m[INFO][0m If this is a Jetson device, please check /etc/nv_tegra_release
+[0;31m[ERROR][0m Failed to setup inference libraries
