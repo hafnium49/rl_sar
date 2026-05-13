@@ -2,7 +2,102 @@
 [0;34m[Setting up Inference Runtime][0m
 [0;34m[INFO][0m Checking inference libraries...
 [0;34m[INFO][0m Checking inference runtimes...
-[0;31m[ERROR][0m ARM64 Linux detected but not identified as Jetson
-[0;31m[ERROR][0m LibTorch prebuilt binaries for generic ARM64 Linux are not available
-[0;34m[INFO][0m If this is a Jetson device, please check /etc/nv_tegra_release
-[0;31m[ERROR][0m Failed to setup inference libraries
+[0;32m[SUCCESS][0m LibTorch already exists and is valid
+[0;34m[INFO][0m Downloading ONNX Runtime 1.22.0...
+[0;34m[INFO][0m Platform: Linux (aarch64)
+[0;34m[INFO][0m URL: https://github.com/microsoft/onnxruntime/releases/download/v1.22.0/onnxruntime-linux-aarch64-1.22.0.tgz
+#=#=#                                                                                                                                                     0.2%############################################                              62.4%######################################################################## 100.0%
+[0;34m[INFO][0m Extracting ONNX Runtime...
+[0;32m[SUCCESS][0m ONNX Runtime 1.22.0 installed successfully
+[0;32m[SUCCESS][0m All inference runtimes are ready
+[0;32m[SUCCESS][0m Inference runtime setup completed!
+[0;34m-------------------------------------------------------------------[0m
+[0;34m[Setting up Robot Descriptions][0m
+[0;34m[INFO][0m Checking robot description files...
+[0;34m-------------------------------------------------------------------[0m
+[0;34m[Robot Descriptions Setup][0m
+[1;33m[WARNING][0m Robot descriptions not found or invalid
+[0;34m[INFO][0m Network available, checking for updates...
+[0;34m[INFO][0m Cloning robot descriptions repository...
+Cloning into '/home/h_fujiwara/projects/rl_sar/src/rl_sar_zoo'...
+Updating files:  69% (406/588)Updating files:  70% (412/588)Updating files:  71% (418/588)Updating files:  72% (424/588)Updating files:  73% (430/588)Updating files:  74% (436/588)Updating files:  75% (441/588)Updating files:  76% (447/588)Updating files:  77% (453/588)Updating files:  78% (459/588)Updating files:  79% (465/588)Updating files:  80% (471/588)Updating files:  81% (477/588)Updating files:  82% (483/588)Updating files:  83% (489/588)Updating files:  84% (494/588)Updating files:  85% (500/588)Updating files:  86% (506/588)Updating files:  87% (512/588)Updating files:  88% (518/588)Updating files:  89% (524/588)Updating files:  90% (530/588)Updating files:  91% (536/588)Updating files:  92% (541/588)Updating files:  93% (547/588)Updating files:  94% (553/588)Updating files:  95% (559/588)Updating files:  96% (565/588)Updating files:  97% (571/588)Updating files:  98% (577/588)Updating files:  99% (583/588)Updating files: 100% (588/588)Updating files: 100% (588/588), done.
+[0;34m-------------------------------------------------------------------[0m
+[0;32m[SUCCESS][0m Robot descriptions setup completed!
+[0;34m[INFO][0m Installation path: /home/h_fujiwara/projects/rl_sar/src/rl_sar_zoo
+[0;34m[INFO][0m Version: 1.0.1
+[0;32m[SUCCESS][0m Robot descriptions setup completed!
+[0;34m-------------------------------------------------------------------[0m
+[0;34m[Setting up MuJoCo][0m
+[0;34m[INFO][0m Checking MuJoCo library...
+[0;34m-------------------------------------------------------------------[0m
+[0;34m[MuJoCo Setup][0m
+[0;32m[SUCCESS][0m MuJoCo 3.2.7 is already installed and valid
+[0;32m[SUCCESS][0m MuJoCo setup completed!
+[0;34m-------------------------------------------------------------------[0m
+[0;34m[Running MuJoCo Build][0m
+[0;34m[INFO][0m Building with MuJoCo simulator support...
+[0;34m-------------------------------------------------------------------[0m
+-- The CXX compiler identification is GNU 13.3.0
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: /usr/bin/c++ - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+CMake Warning at CMakeLists.txt:25 (message):
+  ROS_DISTRO not set, assuming non-ROS mode
+
+
+-- Found ONNX Runtime at: /home/h_fujiwara/projects/rl_sar/library/inference_runtime/onnxruntime
+-- ONNX Runtime library: /home/h_fujiwara/projects/rl_sar/library/inference_runtime/onnxruntime/lib/libonnxruntime.so
+-- Found LibTorch at: /home/h_fujiwara/projects/rl_sar/library/inference_runtime/libtorch
+CMake Warning at /home/h_fujiwara/projects/rl_sar/library/inference_runtime/libtorch/share/cmake/Torch/TorchConfig.cmake:22 (message):
+  static library kineto_LIBRARY-NOTFOUND not found.
+Call Stack (most recent call first):
+  /home/h_fujiwara/projects/rl_sar/library/inference_runtime/libtorch/share/cmake/Torch/TorchConfig.cmake:127 (append_torchlib_if_found)
+  CMakeLists.txt:183 (find_package)
+
+
+-- LibTorch version: 2.3.0
+-- Torch libraries: torch;torch_library;/home/h_fujiwara/projects/rl_sar/library/inference_runtime/libtorch/lib/libc10.so
+-- Configured RPATH:
+--   - /home/h_fujiwara/projects/rl_sar/library/inference_runtime/libtorch/lib
+--   - /home/h_fujiwara/projects/rl_sar/library/inference_runtime/onnxruntime/lib
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD - Success
+-- Found Threads: TRUE  
+-- Found Python3: /usr/bin/python3 (found version "3.12.3") found components: Interpreter Development Development.Module Development.Embed 
+-- Added Python library path to RPATH: /usr/lib/aarch64-linux-gnu
+-- Current system architecture: aarch64
+CMake Error at CMakeLists.txt:292 (add_subdirectory):
+  The source directory
+
+    /home/h_fujiwara/projects/rl_sar/src/rl_sar/library/thirdparty/robot_sdk/unitree/unitree_sdk2
+
+  does not contain a CMakeLists.txt file.
+
+
+-- Found Python3: /usr/include/python3.12 (found version "3.12.3") found components: NumPy Interpreter Development.Module 
+-- Added MuJoCo to RPATH: /home/h_fujiwara/projects/rl_sar/library/mujoco/lib
+-- MuJoCo configured: /home/h_fujiwara/projects/rl_sar/library/mujoco
+-- ========================================
+--        RL_SAR Build Configuration       
+-- ========================================
+-- Project: rl_sar v4.0.0
+-- System: Linux
+-- Architecture: aarch64
+-- C++ Standard: 17
+-- Build Type: Debug
+-- Compiler: GNU 13.3.0
+-- USE_CMAKE: ON
+-- ----------------------------------------
+-- Backend Configuration:
+-- USE_TORCH: ON
+-- USE_ONNX: ON
+-- LibTorch version: 2.3.0
+-- ONNX Runtime version: 1.22.0
+-- ----------------------------------------
+-- Simulator Configuration:
+-- USE_MUJOCO: ON
+-- MuJoCo: Enabled
+-- ========================================
+-- Configuring incomplete, errors occurred!
