@@ -30,6 +30,10 @@ from pathlib import Path
 
 import pexpect
 
+# python-xlib for XTest synthetic key injection (hide MuJoCo Simulate's UI panels)
+from Xlib import display as xdisplay, X, XK
+from Xlib.ext import xtest
+
 REPO = Path("/home/h_fujiwara/projects/rl_sar")
 BIN = REPO / "cmake_build/bin/rl_sim_mujoco"
 LIBTORCH = REPO / "library/inference_runtime/libtorch/lib"
@@ -38,7 +42,10 @@ MP4 = REPO / "dance_102.mp4"
 LOG = REPO / "run.log"
 DISPLAY = ":99"
 
-W, H = 640, 480
+W, H = 1920, 1080
+# GLFW creates a 2/3-of-screen window (glfw_adapter.cc:60), so the actual MuJoCo
+# window is W_WIN × H_WIN anchored at (0,0). Grab only that region.
+W_WIN, H_WIN = 2 * W // 3, 2 * H // 3
 
 # Per-transition timeout (sim under llvmpipe runs at ~1% RTF for the 29-DoF scene)
 TRANSITION_TIMEOUT_S = 900   # 15 min upper bound each
@@ -57,6 +64,41 @@ def wait_for_xvfb(display: str, timeout: float = 5.0) -> bool:
             return True
         time.sleep(0.2)
     return False
+
+
+def send_tab_to_hide_ui(display_name: str) -> None:
+    """Use XTest to hide both MuJoCo Simulate UI panels.
+
+    simulate.cc:1680-1687 handler:
+        Tab        → toggle left panel  (ui0_enable)
+        Shift+Tab  → toggle right panel (ui1_enable)
+
+    XTest events are accepted by GLFW (plain XSendEvent would be filtered)."""
+    d = xdisplay.Display(display_name)
+    try:
+        tab = d.keysym_to_keycode(XK.XK_Tab)
+        shift = d.keysym_to_keycode(XK.XK_Shift_L)
+        # Plain Tab → hide left panel
+        xtest.fake_input(d, X.KeyPress, tab)
+        d.sync()
+        time.sleep(0.05)
+        xtest.fake_input(d, X.KeyRelease, tab)
+        d.sync()
+        time.sleep(0.1)
+        # Shift+Tab → hide right panel
+        xtest.fake_input(d, X.KeyPress, shift)
+        d.sync()
+        time.sleep(0.02)
+        xtest.fake_input(d, X.KeyPress, tab)
+        d.sync()
+        time.sleep(0.05)
+        xtest.fake_input(d, X.KeyRelease, tab)
+        d.sync()
+        time.sleep(0.02)
+        xtest.fake_input(d, X.KeyRelease, shift)
+        d.sync()
+    finally:
+        d.close()
 
 
 def expect_transition(proc: pexpect.spawn, regex: str, label: str,
@@ -134,13 +176,16 @@ def main() -> int:
             print("ERROR: Xvfb did not come up", file=sys.stderr)
             return 3
 
-        # 2. ffmpeg recording (long ceiling; we stop it when done)
-        print(f"[orchestrator] starting ffmpeg x11grab -> {MP4}", flush=True)
+        # 2. ffmpeg recording (long ceiling; we stop it when done).
+        # Grab only the GLFW window area (top-left W_WIN × H_WIN); the rest of
+        # Xvfb is unused root background.
+        print(f"[orchestrator] starting ffmpeg x11grab {W_WIN}x{H_WIN}+0,0 -> {MP4}",
+              flush=True)
         ffmpeg = subprocess.Popen(
             [
                 "ffmpeg", "-y", "-framerate", "15",
-                "-video_size", f"{W}x{H}",
-                "-f", "x11grab", "-i", DISPLAY,
+                "-video_size", f"{W_WIN}x{H_WIN}",
+                "-f", "x11grab", "-i", f"{DISPLAY}.0+0,0",
                 "-t", str(MAX_RECORD_S),
                 "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
                 str(MP4),
@@ -166,16 +211,28 @@ def main() -> int:
             "binary up (FSMManager registered g1)", 60):
             return 4
 
-        # Give the viewer & simulation_running flag a moment to settle
-        time.sleep(3)
+        # Brief settle (~1s) so the viewer + RL_Sim start logs are out of the way.
+        # Don't wait longer: Passive state uses kp=0/kd=8 (damping only, no position
+        # hold), so gravity will pull the robot to the floor in a few seconds.
+        time.sleep(1)
 
-        # Send '0' once — Passive's CheckChange has no percent-gate, so a single
-        # cycle with current_keyboard=Num0 triggers the transition.
+        # Send '0' immediately so GetUp's fixed_kp engages before the robot falls.
         if not send_until_transition(
             proc, "0",
             r"Switch from RLFSMStatePassive to RLFSMStateGetUp",
             "Passive → GetUp", total_timeout_s=60):
             return 10
+
+        # Hide both UI panels via XTest Tab + Shift+Tab (handler at simulate.cc:1680).
+        # Do this after sending '0' so the GetUp interpolation starts on a still-
+        # standing robot.
+        print("[orchestrator] hiding UI panels via XTest Tab + Shift+Tab",
+              flush=True)
+        try:
+            send_tab_to_hide_ui(DISPLAY)
+        except Exception as e:  # noqa: BLE001
+            print(f"[orchestrator] WARN: Tab injection failed: {e}",
+                  file=sys.stderr, flush=True)
 
         # Wait for GetUp interpolation to reach 100%, THEN send Num1.
         # Interpolate prints "100.00% - Getting up" followed by "Getting up completed".
