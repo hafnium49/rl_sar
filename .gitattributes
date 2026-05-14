@@ -1,1 +1,16 @@
 *.sh eol=lf
+
+# Git LFS — binary motion-capture artifacts under data/ibaraki_radio_taiso/.
+# These patterns affect commits made from this point forward. The existing
+# binaries in commits 811481d (source zips) and 9e5df89 (converted FBX 7700)
+# were committed before LFS was enabled and remain as plain blobs on origin —
+# that's a deliberate trade (see docs/fbx3000_intel_handoff.md for context).
+#
+# Forward-only LFS means anyone cloning fresh will get the past binaries via
+# normal git transport (no LFS install required for read-only use) but any
+# NEW binaries added under data/ibaraki_radio_taiso/ will go to LFS and
+# require `git lfs install` plus LFS bandwidth on push.
+data/ibaraki_radio_taiso/**/*.zip filter=lfs diff=lfs merge=lfs -text
+data/ibaraki_radio_taiso/**/*.fbx filter=lfs diff=lfs merge=lfs -text
+data/ibaraki_radio_taiso/**/*.bvh filter=lfs diff=lfs merge=lfs -text
+data/ibaraki_radio_taiso/**/*.npz filter=lfs diff=lfs merge=lfs -text
