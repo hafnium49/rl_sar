@@ -51,11 +51,11 @@ The as-built record for the simulation track is in [`docs/g1_dance_mujoco_plan.m
 
 Three blockers were diagnosed and resolved (commit chain [`cc7f9ff`](https://github.com/hafnium49/rl_sar/commit/cc7f9ff) → [`2f229e8`](https://github.com/hafnium49/rl_sar/commit/2f229e8) → [`fdbb3ec`](https://github.com/hafnium49/rl_sar/commit/fdbb3ec) → [`1c54eaf`](https://github.com/hafnium49/rl_sar/commit/1c54eaf)):
 
-1. **No aarch64 LibTorch path.** [`scripts/download_inference_runtime.sh`](../scripts/download_inference_runtime.sh) bails out at line ~101 for aarch64 non-Jetson. DGX Spark trips neither Jetson marker. Workaround: copy NVIDIA's NEW-ABI `torch==2.9.1+cu130` from an existing `sam3` conda env into [`library/inference_runtime/libtorch/`](../library/inference_runtime/libtorch/), including the sibling `torch.libs/` deps and four CUDA libs from `nvidia/{cudnn,nccl,nvshmem,cusparselt}/lib/`. Set `CMAKE_PREFIX_PATH` and `CUDAToolkit_ROOT=/usr/local/cuda`.
+1. **No aarch64 LibTorch path.** [`scripts/download_inference_runtime.sh`](../scripts/download_inference_runtime.sh) bails out at line ~101 for aarch64 non-Jetson. DGX Spark trips neither Jetson marker. Workaround: copy NVIDIA's NEW-ABI `torch==2.9.1+cu130` from an existing `sam3` conda env into `library/inference_runtime/libtorch/` (gitignored), including the sibling `torch.libs/` deps and four CUDA libs from `nvidia/{cudnn,nccl,nvshmem,cusparselt}/lib/`. Set `CMAKE_PREFIX_PATH` and `CUDAToolkit_ROOT=/usr/local/cuda`.
 2. **ABI mismatch.** Pip-installed aarch64 PyTorch wheels are `_GLIBCXX_USE_CXX11_ABI=0` (OLD ABI); Ubuntu 24.04 `yaml-cpp` is NEW ABI. Result was unresolved `YAML::LoadFile` symbols at link time. NEW-ABI torch from NVIDIA's build resolves it.
-3. **MuJoCo 3.2.7 supply.** `pip install mujoco==3.2.7` was used to obtain a known-good binary, then symlinked into [`library/mujoco/`](../library/mujoco/). MuJoCo 3.3+ was rejected (rl_sar's vendored [`simulate.cc`](../src/rl_sar/library/thirdparty/mujoco_simulate/simulate.cc) uses the now-removed `mjvSceneState` API and pins C++17).
+3. **MuJoCo 3.2.7 supply.** `pip install mujoco==3.2.7` was used to obtain a known-good binary, then symlinked into `library/mujoco/` (gitignored). MuJoCo 3.3+ was rejected (rl_sar's vendored [`simulate.cc`](../src/rl_sar/library/thirdparty/mujoco_simulate/simulate.cc) uses the now-removed `mjvSceneState` API and pins C++17).
 
-**Outcome:** `./build.sh -mj` builds all seven CMake-only binaries cleanly. The MuJoCo target [`cmake_build/bin/rl_sim_mujoco`](../cmake_build/bin/) is 15 MB; `ldd` resolves to the staged LibTorch and `libmujoco.so.3.2.7` symlink chain.
+**Outcome:** `./build.sh -mj` builds all seven CMake-only binaries cleanly. The MuJoCo target `cmake_build/bin/rl_sim_mujoco` is 15 MB; `ldd` resolves to the staged LibTorch and `libmujoco.so.3.2.7` symlink chain.
 
 ### Phase C — Headless C++ execution (2026-05-13)
 
