@@ -18,15 +18,17 @@ The realistic conversion paths all need x86 or x86_64 hardware. This document de
 
 ## What you need to convert
 
-Five Ibaraki MoCap takes of Radio Taiso Daiichi (ラジオ体操第一), one FBX file per take, ~16 MB compressed:
+Five Ibaraki MoCap takes of Radio Taiso Daiichi (ラジオ体操第一), one FBX file per take, ~16 MB compressed. The zips are committed in this repository so an Intel/x86_64 collaborator can `git pull` and convert them in place:
 
 ```
-/home/h_fujiwara/projects/rl_sar/tmp/take11.zip → take11.fbx (FBX 3000, ~36 MB)
-/home/h_fujiwara/projects/rl_sar/tmp/take12.zip → take12.fbx
-/home/h_fujiwara/projects/rl_sar/tmp/take13.zip → take13.fbx
-/home/h_fujiwara/projects/rl_sar/tmp/take14.zip → take14.fbx
-/home/h_fujiwara/projects/rl_sar/tmp/take15.zip → take15.fbx
+data/ibaraki_radio_taiso/take11.zip → take11.fbx (FBX 3000, ~36 MB)
+data/ibaraki_radio_taiso/take12.zip → take12.fbx
+data/ibaraki_radio_taiso/take13.zip → take13.fbx
+data/ibaraki_radio_taiso/take14.zip → take14.fbx
+data/ibaraki_radio_taiso/take15.zip → take15.fbx
 ```
+
+These are tracked despite the repo-wide `*.zip` ignore via an explicit `!data/ibaraki_radio_taiso/*.zip` override in [.gitignore](../.gitignore).
 
 Each `.fbx` is one performer doing the full ~3-minute routine, captured on a Motion Star magnetic mocap rig at 30 fps. Skeleton names and root joint are Japanese-labeled; the capture session notes (handwritten PDF) confirm 15 sensors mapped to feet, shins, thighs, pelvis, upper/lower arms, hands, chest, head.
 
@@ -46,7 +48,7 @@ Either of these formats is accepted on the aarch64 side. Pick whichever your too
 - Frame Time matches source (1/30 = 0.033333 s)
 - One file per take, named `take{N}.bvh`
 
-Ship whichever you produce back to `/home/h_fujiwara/projects/rl_sar/tmp/converted/` or hand them off via any file transfer the operator prefers. On the aarch64 side both formats feed cleanly into GMR's `bvh_to_robot.py` (for BVH) or `fbx_importer.py` (for FBX ≥ 7100).
+Ship whichever you produce back via the same git repository — `git add data/ibaraki_radio_taiso/converted/take{N}_fbx7400.fbx` (or `.bvh`), commit, push — or hand them off via any file transfer the operator prefers. On the aarch64 side both formats feed cleanly into GMR's `bvh_to_robot.py` (for BVH) or `fbx_importer.py` (for FBX ≥ 7100).
 
 ## Three conversion paths in order of expected reliability
 

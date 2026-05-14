@@ -40,6 +40,9 @@ MUJOCO_LOG.TXT
 *.tar.gz
 temp_extract*/
 
+# Source mocap data shipped for offline x86_64 conversion (see docs/fbx3000_intel_handoff.md)
+!data/ibaraki_radio_taiso/*.zip
+
 # robot descriptions
 rl_sar_zoo
 
