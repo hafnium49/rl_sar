@@ -157,3 +157,29 @@ The Intel-handoff path in this document remains the right choice if you want **a
 3. Stage 2+ of `~/.claude/plans/read-agent-md-and-plan-sharded-platypus.md` continues: retarget → preview MP4 → CSV → NPZ → PPO training → MuJoCo play → deploy prep.
 
 You don't need to touch any of that. Just ship the modernized files and we'll pick them up.
+
+## Conversion log — 2026-05-14
+
+Executed on an Intel Xeon Platinum 8370C Azure VM (Linux x86_64, Ubuntu 22.04, Python 3.10). Used an in-tree C++ tool against the AutoDesk FBX SDK 2020.3.9 — the closest practical equivalent of Path B since the user staged the C++ SDK (not the Python SDK) at `tmp/fbx202039_fbxsdk_gcc_linux.tar.gz`.
+
+Reproducer:
+1. `tar -xzf tmp/fbx202039_fbxsdk_gcc_linux.tar.gz -C tmp/` then `./tmp/fbx202039_fbxsdk_linux tmp/fbxsdk` (the installer is interactive — accept EULA).
+2. `sudo apt-get install -y libxml2-dev` (the SDK's lone external build dep).
+3. `make -C scripts/fbx_modernize` produces `scripts/fbx_modernize/fbx_modernize` statically linked against `libfbxsdk.a`.
+4. For each take: unzip → run `fbx_modernize take{N}.fbx converted/take{N}_fbx7700.fbx`.
+
+The SDK 2020.3.9 importer reads FBX 3000 cleanly — it reports the source as "FBX version 5.0.0" (its internal feature-version mapping) and exports as FBX 7700. **The Path-B risk flagged earlier (importer refusing FBX 3000) did not materialize.**
+
+Output verification (FBX version field at byte offset 23, little-endian uint32):
+
+| File | Header version | Size |
+|---|---|---|
+| `converted/take11_fbx7700.fbx` | 7700 | 12.5 MB |
+| `converted/take12_fbx7700.fbx` | 7700 | 12.3 MB |
+| `converted/take13_fbx7700.fbx` | 7700 | 12.3 MB |
+| `converted/take14_fbx7700.fbx` | 7700 | 12.4 MB |
+| `converted/take15_fbx7700.fbx` | 7700 | 12.4 MB |
+
+A round-trip on take11 (re-import + re-export of the converted file) produced a byte-identical 12,457,488-byte output, confirming structural validity beyond the header check.
+
+Total converted payload: ~59 MB, committed to the repo. Source see [scripts/fbx_modernize/](../scripts/fbx_modernize/).
