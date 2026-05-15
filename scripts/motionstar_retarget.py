@@ -18,6 +18,7 @@ from pathlib import Path
 import numpy as np
 from tqdm import tqdm
 
+import mink
 from general_motion_retargeting import GeneralMotionRetargeting
 
 parser = argparse.ArgumentParser()
@@ -57,20 +58,41 @@ qpos_seq = np.zeros((T, nq), dtype=np.float32)
 
 # GMR's offset_to_ground searches for body names containing "foot"/"Foot"; ours are
 # "Sensor1".."Sensor15" so it would yield inf->NaN. Pre-ground here once instead:
-# subtract the minimum sensor Z over the first frame's feet so they sit at +0.02 m.
+# subtract the minimum sensor Z over the first frame's feet so the lowest sits at +0.08 m.
+# The +0.08 m clearance accounts for G1's foot mesh extending ~3 cm below the toe_link
+# kinematic site PLUS additional headroom for solver noise. Without this, the foot mesh
+# routinely penetrates the floor even when IK perfectly targets the toe_link position.
 foot_idx_left = names.index("Sensor1")
 foot_idx_right = names.index("Sensor2")
-floor_z = min(pos[0, foot_idx_left, 2], pos[0, foot_idx_right, 2]) - 0.02
+floor_z = min(pos[0, foot_idx_left, 2], pos[0, foot_idx_right, 2]) - 0.08
 pos[..., 2] -= floor_z
-print(f"[retarget] grounded: subtracted floor_z={floor_z:.3f} m from all sensor Z values")
+print(f"[retarget] grounded: subtracted floor_z={floor_z:.3f} m from all sensor Z values "
+      f"(lowest foot will sit at +0.08 m)")
 
+n_skipped = 0
+last_good_qpos = None
 for f in tqdm(range(T), desc="retargeting"):
     human_data = {
         names[i]: (pos[f, i].astype(np.float64), quat[f, i].astype(np.float64))
         for i in range(len(names))
     }
-    qpos = retargeter.retarget(human_data, offset_to_ground=False)
+    try:
+        qpos = retargeter.retarget(human_data, offset_to_ground=False)
+        last_good_qpos = qpos
+    except mink.exceptions.NotWithinConfigurationLimits:
+        # IK solver hit joint limits — happens when extreme weights push the chain into
+        # infeasible configurations. Freeze at the previous good qpos so the retargeter
+        # produces a complete trajectory; the autonomous-loop driver's eval tool will catch
+        # the resulting joint_jump or no-movement artifacts and recover via different weights.
+        if last_good_qpos is None:
+            last_good_qpos = retargeter.configuration.data.qpos.copy()
+        qpos = last_good_qpos
+        n_skipped += 1
     qpos_seq[f] = qpos.astype(np.float32)
+
+if n_skipped > 0:
+    print(f"[retarget] WARNING: {n_skipped}/{T} frames skipped due to IK limit violations; "
+          f"those frames frozen at previous qpos")
 
 out_path = Path(args.out)
 out_path.parent.mkdir(parents=True, exist_ok=True)
