@@ -183,3 +183,15 @@ Output verification (FBX version field at byte offset 23, little-endian uint32):
 A round-trip on take11 (re-import + re-export of the converted file) produced a byte-identical 12,457,488-byte output, confirming structural validity beyond the header check.
 
 Total converted payload: ~59 MB, committed to the repo. Source see [scripts/fbx_modernize/](../scripts/fbx_modernize/).
+
+---
+
+## Downstream — what happens to the converted FBX files
+
+Once converted, the FBX 7700 files are consumed by the retargeting pipeline documented in [`radio_taiso_retargeting.md`](radio_taiso_retargeting.md):
+
+1. `scripts/fbx_motionstar_to_npz.py` — Blender headless extractor → per-frame 15-sensor NPZ
+2. `scripts/motionstar_retarget.py` — NPZ → G1 qpos via GMR's custom `motionstar` source
+3. `scripts/qpos_npz_to_csv.py` + `scripts/evaluate_retarget.py` — CSV emit + metric scoring
+
+The canonical retargeted motion lives at `~/datasets/radio_taiso/gmr/radio_taiso_g1.npz`. See the pipeline doc for the full as-built description.
