@@ -54,6 +54,21 @@ retargeter = GeneralMotionRetargeting(
 nq = retargeter.model.nq
 print(f"[retarget] G1 model nq={nq}")
 
+# Iter 5: lock the 6 wrist DoFs at 0 to enforce left/right symmetry. Position-only IK leaves
+# wrist orientation underdetermined (the 3 wrist DoFs change link orientation but not position),
+# so the mink solver picks asymmetric local minima between left and right arm chains. Zeroing
+# the wrist qpos after IK gives a symmetric, natural-neutral wrist pose. Trade-off: loses any
+# wrist motion content, but for PPO training the reward is dominated by major joints anyway.
+import mujoco as _mj
+WRIST_JOINTS = ["left_wrist_roll_joint", "left_wrist_pitch_joint", "left_wrist_yaw_joint",
+                "right_wrist_roll_joint", "right_wrist_pitch_joint", "right_wrist_yaw_joint"]
+wrist_qpos_idx = []
+for jname in WRIST_JOINTS:
+    jid = _mj.mj_name2id(retargeter.model, _mj.mjtObj.mjOBJ_JOINT, jname)
+    if jid >= 0:
+        wrist_qpos_idx.append(int(retargeter.model.jnt_qposadr[jid]))
+print(f"[retarget] wrist DoF qpos indices to zero: {wrist_qpos_idx}")
+
 qpos_seq = np.zeros((T, nq), dtype=np.float32)
 
 # GMR's offset_to_ground searches for body names containing "foot"/"Foot"; ours are
@@ -78,6 +93,10 @@ for f in tqdm(range(T), desc="retargeting"):
     }
     try:
         qpos = retargeter.retarget(human_data, offset_to_ground=False)
+        # Iter 5: enforce wrist symmetry by zeroing the 6 wrist DoFs post-IK
+        qpos = qpos.copy()
+        for idx in wrist_qpos_idx:
+            qpos[idx] = 0.0
         last_good_qpos = qpos
     except mink.exceptions.NotWithinConfigurationLimits:
         # IK solver hit joint limits — happens when extreme weights push the chain into
