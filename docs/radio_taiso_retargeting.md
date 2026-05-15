@@ -159,6 +159,8 @@ Five iterations of refinement, each gated on the metric suite from `evaluate_ret
 | **3D** | Re-enable `rot_weight` on rubber_hand targets | — | **SKIPPED**. Same garbage-quaternion blocker as 3C. |
 | **4** | Replace `human_scale_table` guess values (leg 0.9, arm 0.8) with morphology-measured ratios (leg 0.876, arm 0.775) | — | **REVERTED**. Measured ratios differed from guesses by 2-3% — too small to move `self_collision` or `weighted_kp_err`. The morphology mismatch isn't the binding constraint for the remaining metric failures. |
 | **5** | Lock 6 wrist DoFs at 0 post-IK in [`motionstar_retarget.py`](../scripts/motionstar_retarget.py) | **joint_jump 1.41 → 1.09%; joint_limit_violation 0.05 → 0.00%**; wrist trajectories now mathematically symmetric | Trade-off: wrist_error +1.56 cm (positional metric artifact — neutral wrist orientation no longer aligned with back-of-hand sensor orientation). Wrist motion content lost but PPO-irrelevant. |
+| **6A** | Add per-body L/R metric breakdown + `lr_asymmetry_max_ratio` to [`evaluate_retarget.py`](../scripts/evaluate_retarget.py) | `lr_asymmetry_max_ratio = 0.235` (threshold 0.25) → **SOFT PASS** at average level. Worst pair: toes (left 11.6 vs right 7.2 cm). | Diagnostic only — confirms morphological symmetry of the *config* is reflected in *average* output. |
+| **6B** | Build [`scripts/test_mirror_equivariance.py`](../scripts/test_mirror_equivariance.py) — implements `F(M_source(x)) ≈ M_robot(F(x))` test from the third-opinion review | Per-body world-position diff between `retarget(mirror(source))` and `mirror(retarget(source))`. | **FAIL on max** (80 cm at left_elbow_link) but mean diffs 4-13 cm. Bias is mink solver path-dependence on transient frames, not configuration bias. Accepted as known limitation; full fix would require alternate IK solver or per-frame initial-pose seeding. |
 
 **Stage 2c** (batch over takes 12–15 with the Iter-3-final config): take12 won with 6/8 gates pass + `weighted_kp_err = 10.34`. Take11 was the runner-up (6/8 gates, 10.76). Takes 13–15 had `ground_penetration` of 49–56% (data quality issue, likely frame-0 not-a-rest-pose; held back as a future improvement opportunity but not blocking).
 
@@ -234,6 +236,9 @@ The retargeter's `floor_z = min(foot_z) − 0.08 m` works for takes 11–12 (fra
 
 ### Wrist motion content lost (Iter 5 trade-off)
 Locking wrist DoFs at 0 means the reference motion has no wrist-orientation content. For PPO this is acceptable (reward dominated by major joints), but a faithful Radio Taiso reproduction needs wrist articulation. Same source-quaternion fix above would unblock proper wrist tracking via 3D's orientation IK.
+
+### Retargeter solver path-dependence (Iter 6B finding)
+Mink's IK solver produces non-mirror-equivariant output on transient frames — `retarget(mirror(source))` differs from `mirror(retarget(source))` by up to 80 cm at the worst body (left elbow) on individual frames, with mean diffs of 4-13 cm. The pattern is "left side consistently slightly worse than right." This is *solver* asymmetry (deterministic starting point + iterative gradient descent producing different local minima on swapped data), not *config* asymmetry — the IK weights and rot_offsets are properly mirror-paired. **`lr_asymmetry_max_ratio = 0.235` (just under the 0.25 threshold)** confirms the average-frame behavior is balanced; only specific frames show large divergence. Fixing this would require either a different IK solver or per-frame initial-pose seeding from the previous frame's mirror — substantial work for marginal PPO-training benefit. Documented for future investigation.
 
 ---
 

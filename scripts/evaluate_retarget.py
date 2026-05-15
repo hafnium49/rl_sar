@@ -36,6 +36,9 @@ DEFAULT_THRESHOLDS = {
     "self_collision_frame_pct":            {"max": 3.0,  "severity": "hard"},
     "ground_penetration_frame_pct":        {"max": 1.0,  "severity": "hard"},
     "foot_slip_during_contact_cm_per_s":   {"max": 5.0,  "severity": "hard"},
+    # Iter 6A — left/right artifact balance (third-opinion principle: morphological equivariance).
+    # Soft because reaching the 0.25 threshold tells us mapping is unbiased; informational beyond.
+    "lr_asymmetry_max_ratio":              {"max": 0.25, "severity": "soft"},
 }
 
 # Priority-based body weights for MPJPE; physics-critical >> style >> expressive.
@@ -216,6 +219,33 @@ def main() -> int:
     self_collision_frame_pct = float(100 * self_coll_frames.mean())
     ground_penetration_frame_pct = float(100 * ground_pen_frames.mean())
 
+    # ---- Metric 6 (Iter 6A): left/right artifact balance ----
+    # Production mocap pipelines check that L/R sides of the retarget have balanced error.
+    # Mathematically symmetric IK weights + scales can still produce one-side-worse output
+    # due to solver path dependence. This metric exposes that bias.
+    def lr_pair(left_body: str, right_body: str) -> tuple[float, float, float]:
+        l = per_body_error_cm.get(left_body, 0.0)
+        r = per_body_error_cm.get(right_body, 0.0)
+        ratio = abs(l - r) / max(l + r, 1e-6)
+        return l, r, ratio
+
+    lr_pairs_cm = {
+        "hand":     lr_pair("left_rubber_hand", "right_rubber_hand"),
+        "elbow":    lr_pair("left_elbow_link", "right_elbow_link"),
+        "shoulder": lr_pair("left_shoulder_yaw_link", "right_shoulder_yaw_link"),
+        "knee":     lr_pair("left_knee_link", "right_knee_link"),
+        "hip":      lr_pair("left_hip_roll_link", "right_hip_roll_link"),
+        "toe":      lr_pair("left_toe_link", "right_toe_link"),
+    }
+    lr_asymmetry_max_ratio = float(max(p[2] for p in lr_pairs_cm.values()))
+    lr_breakdown = {f"{k}_{side}_cm": v
+                    for k, (l, r, _) in lr_pairs_cm.items()
+                    for side, v in (("left", l), ("right", r))}
+    lr_breakdown["foot_slip_left_cm_per_s"] = float(left_slip)
+    lr_breakdown["foot_slip_right_cm_per_s"] = float(right_slip)
+    foot_slip_lr_ratio = abs(left_slip - right_slip) / max(left_slip + right_slip, 1e-6)
+    lr_asymmetry_max_ratio = max(lr_asymmetry_max_ratio, float(foot_slip_lr_ratio))
+
     # ---- Assemble report ----
     report = {
         "n_frames": int(n_frames),
@@ -234,6 +264,8 @@ def main() -> int:
         "left_foot_contact_frames": int(left_contact.sum()),
         "right_foot_contact_frames": int(right_contact.sum()),
         "per_body_error_cm": per_body_error_cm,
+        "lr_asymmetry_max_ratio": lr_asymmetry_max_ratio,
+        "lr_breakdown": lr_breakdown,
     }
 
     pass_flags: dict[str, bool] = {}
