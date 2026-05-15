@@ -64,8 +64,19 @@ print(f"[motionstar] n_frames={n_frames}  duration_s={n_frames / 30.0:.1f}")
 bpy.context.scene.frame_start = 1
 bpy.context.scene.frame_end = n_frames
 
-# Y-up → Z-up rotation: +90° about X. (x,y,z)_yup → (x, -z, y)_zup.
-R_y2z = Matrix.Rotation(1.5707963267948966, 4, 'X')
+# Motion Star is left-handed (X=right, Y=up, Z=forward); MuJoCo G1 is right-handed
+# (X=forward, Y=left, Z=up). Converting requires a reflection (det = -1), not a rotation:
+#   (x_src, y_src, z_src) → (z_src, -x_src, y_src)_target
+# Verified against frame-1 sensor data: pelvis (2.21, 99.67, -12.70) → (-0.127, -0.022, 0.997)m,
+# chest in front of pelvis, Sensor1 (left foot) lands on +Y (left) side. Note: this matrix is
+# also applied to the rotation part of matrix_world; the resulting quaternion is mathematically
+# garbage (you can't quaternion-encode a reflection), but it's unused — IK runs position-only.
+R_y2z = Matrix((
+    (0,  0, 1, 0),
+    (-1, 0, 0, 0),
+    (0,  1, 0, 0),
+    (0,  0, 0, 1),
+))
 
 
 def collect_fcurves(obj):
